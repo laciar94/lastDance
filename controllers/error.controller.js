@@ -1,55 +1,85 @@
-const dotenv = require('dotenv');
+const AppError = require('../utils/appError.util');
 
-// Utils
-const { AppError } = require('../utils/appError.util');
+/**
+ * If the data type sent to the server does not match what was expected, then return a new AppError
+ * object with a message and a status code of 400.
+ */
+const handleCastError22P02 = () =>
+  new AppError('Some type of data send does not match was expected', 400);
 
-dotenv.config({ path: './config.env' });
+/**
+ * If the token is invalid, throw an error.
+ */
+const handleJWTError = () =>
+  new AppError('Invalid Token. Please login again!', 401);
 
-const sendErrorDev = (error, req, res) => {
-	res.status(error.statusCode).json({
-		status: error.status,
-		message: error.message,
-		error,
-		stack: error.stack,
-	});
+/**
+ * If the error is a JWT expired error, then return a new AppError with a message of 'Your token has
+ * expired! Please login again.' and a status code of 401.
+ */
+const handleJWTExpiredError = () =>
+  new AppError('Your token has expired! Please login again.', 401);
+
+/**
+ * It takes an error object and a response object as arguments, and returns a response object with the
+ * status code, status, error, message, and stack properties.
+ * @param err - the error object
+ * @param res - The response object
+ */
+const sendErrorDev = (err, res) => {
+  res.status(err.statusCode).json({
+    status: err.status,
+    error: err,
+    message: err.message,
+    stack: err.stack,
+  });
 };
 
-const sendErrorProd = (error, req, res) => {
-	res.status(error.statusCode).json({
-		status: error.status,
-		message: error.message || 'Something went wrong!',
-	});
+/**
+ * If the error is operational, send the error message to the client. If it's not, send a generic error
+ * message to the client
+ * @param err - the error object
+ * @param res - the response object
+ */
+const sendErrorProd = (err, res) => {
+  //Operational, trusted error: send message to client
+  if (err.isOperational) {
+    res.status(err.statusCode).json({
+      status: err.status,
+      message: err.message,
+    });
+  } else {
+    //Programming or other unknown error: don't leak error details
+    console.error('ERROR 🧨', err);
+    res.status(500).json({
+      status: 'fail',
+      message: 'Something went very wrong!',
+    });
+  }
 };
 
-const tokenExpiredError = () => {
-	return new AppError('Session expired', 403);
-};
+const globalErrorHandler = (err, req, res, next) => {
+  err.statusCode = err.statusCode || 500;
+  err.status = err.status || 'fail';
 
-const tokenInvalidSignatureError = () => {
-	return new AppError('Session invalid', 403);
-};
+  if (process.env.NODE_ENV === 'development') {
+    sendErrorDev(err, res);
+  }
 
-const dbUniqueConstraintError = () => {
-	return new AppError('The entered email has already been taken', 400);
-};
+  if (process.env.NODE_ENV === 'production') {
+    let error = { ...err };
 
-const globalErrorHandler = (error, req, res, next) => {
-	// Set default values for original error obj
-	error.statusCode = error.statusCode || 500;
-	error.status = error.status || 'fail';
+    if (!error.parent?.code) {
+      error = err;
+    }
 
-	if (process.env.NODE_ENV === 'development') {
-		sendErrorDev(error, req, res);
-	} else if (process.env.NODE_ENV === 'production') {
-		let err = { ...error };
+    if (error.parent?.code === '22P02') error = handleCastError22P02(error);
+    if (error.name === 'JsonWebTokenError') error = handleJWTError(error);
+    if (error.name === 'TokenExpiredError')
+      error = handleJWTExpiredError(error);
 
-		if (error.name === 'TokenExpiredError') err = tokenExpiredError();
-		else if (error.name === 'JsonWebTokenError')
-			err = tokenInvalidSignatureError();
-		else if (error.name === 'SequelizeUniqueConstraintError')
-			err = dbUniqueConstraintError();
-		sendErrorProd(err, req, res);
-	}
+    sendErrorProd(error, res);
+  }
 };
 
 module.exports = { globalErrorHandler };
